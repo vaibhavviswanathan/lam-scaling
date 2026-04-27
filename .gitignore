@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editor
+.vscode/
+.idea/
+
+# Project artifacts
+runs/
+*.pt
+*.ckpt
+logs/
+*.log
+wandb/
+
+# Hugging Face / Torch hub caches if dropped locally
+.cache/
+hf_cache/
+torch_hub/
+
+# OS
+.DS_Store
