@@ -24,7 +24,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from data import EgocentricClipDataset
+from data import EgocentricClipDataset, LocalClipDataset
 from model import (
     LAM,
     GaussianBottleneck,

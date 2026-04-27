@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from data import EgocentricClipDataset
+from data import EgocentricClipDataset, LocalClipDataset
 from model import LAM, load_dinov2_small, make_bottleneck
 
 
@@ -52,6 +52,8 @@ def train(
     save_path: str = "lam.pt",
     num_workers: int = 4,
     seed: int = 0,
+    source: str = "hf",
+    data_path: str | None = None,
 ) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
@@ -59,16 +61,33 @@ def train(
     torch.manual_seed(seed)
 
     max_videos = max(1, int(hours * VIDEOS_PER_HOUR))
-    print(f"[{bottleneck}] Streaming up to {max_videos} videos (~{hours}h)")
+    print(f"[{bottleneck}] source={source} up to {max_videos} videos (~{hours}h)")
 
-    ds = EgocentricClipDataset(
-        clip_len=clip_len,
-        stride=stride,
-        image_size=image_size,
-        max_videos=max_videos,
-        clips_per_video=4,
-        seed=seed,
-    )
+    if source == "hf":
+        ds = EgocentricClipDataset(
+            clip_len=clip_len,
+            stride=stride,
+            image_size=image_size,
+            max_videos=max_videos,
+            clips_per_video=4,
+            seed=seed,
+        )
+    elif source == "dir":
+        if not data_path:
+            raise ValueError("--data_path required when --source dir")
+        # loop=True so a small directory still saturates `--steps` of training.
+        ds = LocalClipDataset(
+            path=data_path,
+            clip_len=clip_len,
+            stride=stride,
+            image_size=image_size,
+            max_videos=max_videos,
+            clips_per_video=4,
+            seed=seed,
+            loop=True,
+        )
+    else:
+        raise ValueError(f"unknown source: {source}")
     loader = DataLoader(
         ds,
         batch_size=batch_size,
@@ -208,6 +227,11 @@ if __name__ == "__main__":
     p.add_argument("--save", type=str, default="lam.pt")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--log_every", type=int, default=50)
+    p.add_argument("--source", choices=["hf", "dir"], default="hf",
+                   help="hf: stream Egocentric-100K (gated). dir: local mp4 directory.")
+    p.add_argument("--data_path", type=str, default=None,
+                   help="path to local mp4 dir when --source dir")
     args = p.parse_args()
 
     result = train(
@@ -225,5 +249,8 @@ if __name__ == "__main__":
         save_path=args.save,
         num_workers=args.num_workers,
         seed=args.seed,
+        source=args.source,
+        data_path=args.data_path,
+        log_every=args.log_every,
     )
     print(json.dumps({k: v for k, v in result.items() if k != "history"}, indent=2))
