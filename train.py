@@ -53,6 +53,7 @@ def train(
     log_every: int = 50,
     save_path: str = "lam.pt",
     num_workers: int = 4,
+    prefetch_factor: int = 2,
     seed: int = 0,
     source: str = "hf",
     data_path: str | None = None,
@@ -90,13 +91,15 @@ def train(
         )
     else:
         raise ValueError(f"unknown source: {source}")
-    loader = DataLoader(
-        ds,
+    loader_kwargs = dict(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=(device == "cuda"),
         persistent_workers=(num_workers > 0),
     )
+    if num_workers > 0 and prefetch_factor > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+    loader = DataLoader(ds, **loader_kwargs)
 
     encoder = load_dinov2_small().to(device)
 
@@ -271,6 +274,7 @@ if __name__ == "__main__":
     # output
     p.add_argument("--save", type=str, default="lam.pt")
     p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--prefetch_factor", type=int, default=2)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument("--source", choices=["hf", "dir"], default="hf",
@@ -295,6 +299,7 @@ if __name__ == "__main__":
         free_bits=args.free_bits,
         save_path=args.save,
         num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
         seed=args.seed,
         source=args.source,
         data_path=args.data_path,

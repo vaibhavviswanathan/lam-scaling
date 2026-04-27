@@ -32,6 +32,7 @@ def run_sweep(
     eval_data_path: str | None = None,
     eval_hours: float = 1.0,
     num_workers: int = 6,
+    prefetch_factor: int = 2,
     log_every: int = 25,
     vq_ema: bool = False,
     vq_num_codes: int = 64,
@@ -91,6 +92,7 @@ def run_sweep(
                 source=source,
                 data_path=data_path,
                 num_workers=num_workers,
+                prefetch_factor=prefetch_factor,
                 log_every=log_every,
             )
             if branch == "vq":
@@ -176,6 +178,7 @@ if __name__ == "__main__":
                    help="held-out mp4 cache for eval; falls back to --data_path")
     p.add_argument("--eval_hours", type=float, default=1.0)
     p.add_argument("--num_workers", type=int, default=6)
+    p.add_argument("--prefetch_factor", type=int, default=2)
     p.add_argument("--log_every", type=int, default=25)
     p.add_argument("--vq_ema", action="store_true",
                    help="Use EMA codebook for the VQ branch (recommended).")
@@ -194,6 +197,7 @@ if __name__ == "__main__":
         eval_data_path=args.eval_data_path,
         eval_hours=args.eval_hours,
         num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
         log_every=args.log_every,
         vq_ema=args.vq_ema,
         vq_num_codes=args.vq_num_codes,
