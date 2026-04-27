@@ -28,15 +28,34 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def _decode_mp4(mp4_bytes: bytes) -> torch.Tensor:
-    """Decode mp4 bytes -> (T, C, H, W) uint8 RGB tensor."""
+def _decode_mp4(mp4_bytes: bytes, resize_short: int | None = None) -> torch.Tensor:
+    """Decode mp4 bytes -> (T, C, H, W) uint8 RGB tensor.
+
+    If `resize_short` is given, each frame is rescaled in-decoder so its
+    shorter side matches `resize_short`; this dramatically reduces peak RAM
+    when decoding long clips on a host with many DataLoader workers.
+    """
     import av  # local import: keeps module importable without av
 
     container = av.open(io.BytesIO(mp4_bytes))
+    stream = container.streams.video[0]
+    if resize_short is not None and stream.width > 0 and stream.height > 0:
+        if stream.width < stream.height:
+            new_w = resize_short
+            new_h = int(round(stream.height * resize_short / stream.width))
+        else:
+            new_h = resize_short
+            new_w = int(round(stream.width * resize_short / stream.height))
+    else:
+        new_w = new_h = None
+
     frames = []
     try:
         for frame in container.decode(video=0):
-            frames.append(frame.to_ndarray(format="rgb24"))
+            if new_w is not None:
+                frame = frame.reformat(width=new_w, height=new_h, format="rgb24")
+            arr = frame.to_ndarray(format="rgb24")
+            frames.append(arr)
     finally:
         container.close()
     if not frames:
@@ -105,7 +124,7 @@ class EgocentricClipDataset(IterableDataset):
             if blob is None:
                 continue
             try:
-                yield _decode_mp4(blob)
+                yield _decode_mp4(blob, resize_short=self.image_size)
             except Exception:
                 continue
 
@@ -187,16 +206,22 @@ class LocalClipDataset(IterableDataset):
                 if i % num_workers != worker_id:
                     continue
                 try:
-                    video = _decode_mp4(f.read_bytes())
+                    video = _decode_mp4(f.read_bytes(), resize_short=self.image_size)
                 except Exception:
                     continue
                 T_total = video.shape[0]
                 if T_total < span:
+                    del video
                     continue
+                # extract clips from this video, then drop it before reading
+                # the next file — keeps peak RAM bounded under high worker counts
+                clips = []
                 for _ in range(self.clips_per_video):
                     start = rng.randint(0, T_total - span)
                     idx = torch.arange(self.clip_len) * self.stride + start
-                    clip_uint8 = self.crop(video[idx])
+                    clips.append(self.crop(video[idx]).clone())
+                del video
+                for clip_uint8 in clips:
                     yield self.norm(clip_uint8)
             epoch += 1
             if not self.loop:

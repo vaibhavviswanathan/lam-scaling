@@ -18,7 +18,11 @@ from datasets import load_dataset
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--out", type=str, required=True)
-    p.add_argument("--n", type=int, default=200)
+    p.add_argument("--n", type=int, default=200,
+                   help="target number of files in --out")
+    p.add_argument("--skip", type=int, default=0,
+                   help="skip this many examples in the HF stream before "
+                        "writing files (use to avoid overlap with another cache)")
     p.add_argument("--repo_id", type=str, default="builddotai/Egocentric-100K")
     p.add_argument("--split", type=str, default="train")
     args = p.parse_args()
@@ -30,10 +34,10 @@ def main():
     if start_idx >= args.n:
         print(f"Already have {start_idx} files in {out}, target {args.n} — skipping.")
         return
-    print(f"Caching to {out} (have {start_idx}, target {args.n}).")
+    print(f"Caching to {out} (have {start_idx}, target {args.n}, skip {args.skip}).")
 
     stream = load_dataset(args.repo_id, streaming=True)[args.split]
-    stream = stream.skip(start_idx).take(args.n - start_idx)
+    stream = stream.skip(args.skip + start_idx).take(args.n - start_idx)
 
     t0 = time.time()
     written = start_idx

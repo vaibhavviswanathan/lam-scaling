@@ -35,6 +35,7 @@ def run_sweep(
     log_every: int = 25,
     vq_ema: bool = False,
     vq_num_codes: int = 64,
+    skip_existing: bool = False,
 ):
     """Run the data-scaling sweep across one or both branches.
 
@@ -54,6 +55,33 @@ def run_sweep(
             tag = f"{branch}_h{hours:g}_s{steps}"
             ckpt = out / f"lam_{tag}.pt"
             print(f"\n========== {tag} ==========")
+            if skip_existing and ckpt.exists():
+                print(f"  [skip] {ckpt} already exists; running eval only.")
+                eval_metrics = evaluate(
+                    ckpt=str(ckpt),
+                    hours=eval_hours,
+                    batch_size=bs,
+                    num_batches=50,
+                    dead_zone=(branch == "gaussian"),
+                    source=source,
+                    data_path=eval_path,
+                )
+                row = {
+                    "branch": branch, "hours": hours, "steps": steps,
+                    "train_final_recon": None,
+                    "heldout_recon": eval_metrics["heldout_recon_mse"],
+                    "motion_probe_r2": eval_metrics["motion_probe_r2"],
+                }
+                if branch == "vq":
+                    row["codebook_perplexity"] = eval_metrics["codebook_perplexity"]
+                    row["codes_used"] = eval_metrics["codes_used"]
+                else:
+                    row["kl_raw"] = eval_metrics.get("gauss_kl_raw")
+                    row["active_dims"] = eval_metrics.get("gauss_active_dims")
+                    row["dead_zone_ood_fraction"] = eval_metrics.get("dead_zone_dead_zone_ood_fraction")
+                rows.append(row)
+                (out / "scaling.json").write_text(json.dumps(rows, indent=2))
+                continue
             train_kwargs = dict(
                 bottleneck=branch,
                 hours=hours,
@@ -152,6 +180,8 @@ if __name__ == "__main__":
     p.add_argument("--vq_ema", action="store_true",
                    help="Use EMA codebook for the VQ branch (recommended).")
     p.add_argument("--vq_num_codes", type=int, default=64)
+    p.add_argument("--skip_existing", action="store_true",
+                   help="Skip cells whose checkpoint already exists; re-run eval only.")
     args = p.parse_args()
     run_sweep(
         branches=args.branches,
@@ -167,4 +197,5 @@ if __name__ == "__main__":
         log_every=args.log_every,
         vq_ema=args.vq_ema,
         vq_num_codes=args.vq_num_codes,
+        skip_existing=args.skip_existing,
     )
