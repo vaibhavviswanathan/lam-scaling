@@ -56,33 +56,107 @@ class MLP(nn.Module):
 # =============================================================================
 
 class VQBottleneck(nn.Module):
-    """VQ-VAE bottleneck with straight-through estimator (LAPO-style)."""
+    """VQ-VAE bottleneck with straight-through estimator (LAPO-style).
+
+    Two codebook update modes:
+      - ema=False (default, gradient mode): codebook entries are nn.Parameters
+        and learned via the codebook MSE loss term.
+      - ema=True: codebook is a buffer updated by exponential moving average of
+        per-code cluster means (Oord 2017 eq 4-5). Loss reduces to the
+        commitment term only. Dead codes (cluster_size below `dead_thresh`) are
+        re-seeded from random batch elements every forward in training mode.
+        EMA is the standard cure for the bistable oscillation we observed in
+        our 4000-step run; recommended for scaling sweeps.
+    """
 
     branch_name = "vq"
 
-    def __init__(self, dim: int = 64, num_codes: int = 64, beta: float = 0.25):
+    def __init__(
+        self,
+        dim: int = 64,
+        num_codes: int = 64,
+        beta: float = 0.25,
+        ema: bool = False,
+        decay: float = 0.99,
+        eps: float = 1e-5,
+        dead_thresh: float = 1.0,
+    ):
         super().__init__()
         self.dim = dim
         self.num_codes = num_codes
         self.beta = beta
-        self.codebook = nn.Embedding(num_codes, dim)
-        nn.init.uniform_(self.codebook.weight, -1.0 / num_codes, 1.0 / num_codes)
+        self.ema = ema
+        self.decay = decay
+        self.eps = eps
+        self.dead_thresh = dead_thresh
+
+        if ema:
+            # codebook is a buffer in EMA mode (no autograd updates)
+            init = torch.empty(num_codes, dim).uniform_(-1.0 / num_codes, 1.0 / num_codes)
+            self.register_buffer("embed", init)
+            self.register_buffer("cluster_size", torch.zeros(num_codes))
+            self.register_buffer("embed_avg", init.clone())
+        else:
+            self.codebook = nn.Embedding(num_codes, dim)
+            nn.init.uniform_(self.codebook.weight, -1.0 / num_codes, 1.0 / num_codes)
+
+    def _embed_weight(self) -> torch.Tensor:
+        return self.embed if self.ema else self.codebook.weight
+
+    @torch.no_grad()
+    def _ema_update(self, z: torch.Tensor, idx: torch.Tensor) -> None:
+        # EMA buffers stay in float32 even when forward runs in bf16 autocast,
+        # otherwise running statistics drift due to bf16 precision.
+        z = z.float()
+        # one-hot encoding (N, K)
+        one_hot = F.one_hot(idx, self.num_codes).type(z.dtype)
+        batch_count = one_hot.sum(0)
+        batch_sum = one_hot.t() @ z
+
+        self.cluster_size.mul_(self.decay).add_(batch_count, alpha=1.0 - self.decay)
+        self.embed_avg.mul_(self.decay).add_(batch_sum, alpha=1.0 - self.decay)
+
+        # Laplace-smoothed cluster size for division
+        n = self.cluster_size.sum()
+        smoothed = (
+            (self.cluster_size + self.eps)
+            / (n + self.num_codes * self.eps)
+            * n
+        )
+        new_embed = self.embed_avg / smoothed.unsqueeze(-1).clamp_min(self.eps)
+
+        # re-seed dead codes from random batch elements to keep them alive
+        dead = self.cluster_size < self.dead_thresh
+        if dead.any() and z.shape[0] > 0:
+            rand_idx = torch.randint(0, z.shape[0], (int(dead.sum()),), device=z.device)
+            new_embed[dead] = z[rand_idx]
+            self.cluster_size[dead] = self.dead_thresh
+            self.embed_avg[dead] = new_embed[dead] * self.dead_thresh
+
+        self.embed.copy_(new_embed)
 
     def forward(self, z: torch.Tensor) -> dict[str, Any]:
         # z: (N, dim)
+        embed = self._embed_weight()
         d = (
             z.pow(2).sum(-1, keepdim=True)
-            - 2 * z @ self.codebook.weight.t()
-            + self.codebook.weight.pow(2).sum(-1)
+            - 2 * z @ embed.t()
+            + embed.pow(2).sum(-1)
         )
         idx = d.argmin(-1)
-        z_q = self.codebook(idx)
+        z_q = F.embedding(idx, embed)
 
         commit_loss = F.mse_loss(z_q.detach(), z)
-        codebook_loss = F.mse_loss(z_q, z.detach())
-        loss = codebook_loss + self.beta * commit_loss
+        if self.ema:
+            if self.training:
+                self._ema_update(z.detach(), idx.detach())
+            loss = self.beta * commit_loss
+        else:
+            codebook_loss = F.mse_loss(z_q, z.detach())
+            loss = codebook_loss + self.beta * commit_loss
 
-        # straight-through: gradient flows to z, codebook updated by codebook_loss
+        # straight-through: gradient flows to z; codebook is updated by EMA or
+        # by the codebook MSE term, depending on mode
         z_q_st = z + (z_q - z).detach()
 
         return {

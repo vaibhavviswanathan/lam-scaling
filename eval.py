@@ -49,6 +49,8 @@ def _load_lam(ckpt_path: str, device: str) -> LAM:
             dim=cfg["latent_dim"],
             num_codes=bn_cfg["num_codes"],
             beta=bn_cfg.get("beta", 0.25),
+            ema=bn_cfg.get("ema", False),
+            decay=bn_cfg.get("decay", 0.99),
         )
     elif kind == "gaussian":
         bn = make_bottleneck(

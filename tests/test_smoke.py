@@ -122,6 +122,70 @@ def test_gaussian_optimizer_step_decreases_loss_on_repeated_batch():
     assert losses[-1] < losses[0] * 0.5, f"loss did not decrease: {losses[0]:.4f} -> {losses[-1]:.4f}"
 
 
+def test_vq_ema_keeps_codes_alive():
+    """Without dead-code revival, K=64 collapsed to ~6 live codes in the
+    overnight run. The EMA bottleneck's dead_thresh re-seeding should keep
+    the underlying codebook populated even when any single batch hits only
+    a few codes — we check the cluster_size buffer across many batches."""
+    device = _device()
+    torch.manual_seed(0)
+    encoder = _FakeEncoder(feat_dim=384).to(device)
+    bn = make_bottleneck("vq", dim=64, num_codes=16, beta=0.25, ema=True, decay=0.9)
+    model = LAM(encoder=encoder, bottleneck=bn, feat_dim=384, latent_dim=64).to(device)
+    model.train()
+    trainable = list(model.idm.parameters()) + list(model.fdm.parameters())
+    opt = torch.optim.AdamW(trainable, lr=1e-3)
+
+    seen_codes: set[int] = set()
+    for _ in range(60):
+        clips = torch.randn(4, 8, 3, 224, 224, device=device)
+        out = model(clips)
+        opt.zero_grad(set_to_none=True)
+        out["loss"].backward()
+        opt.step()
+        seen_codes.update(out["aux"]["codes"].unique().tolist())
+
+    live_codes = int((bn.cluster_size > 0.5).sum())
+    assert len(seen_codes) >= 12, (
+        f"With EMA + revival, ≥12/16 codes should be hit across 60 batches; "
+        f"got {len(seen_codes)} unique codes hit"
+    )
+    assert live_codes >= 12, (
+        f"cluster_size buffer should mark ≥12/16 codes alive; got {live_codes}"
+    )
+
+
+def test_vq_ema_checkpoint_roundtrip(tmp_path):
+    device = _device()
+    bn = make_bottleneck("vq", dim=64, num_codes=8, beta=0.25, ema=True)
+    encoder = _FakeEncoder(feat_dim=384).to(device)
+    model = LAM(encoder=encoder, bottleneck=bn, feat_dim=384, latent_dim=64).to(device)
+    p = tmp_path / "lam_ema.pt"
+    torch.save(
+        {
+            "state_dict": {
+                "idm": model.idm.state_dict(),
+                "bottleneck": model.bottleneck.state_dict(),
+                "fdm": model.fdm.state_dict(),
+            },
+            "config": {
+                "feat_dim": 384,
+                "latent_dim": 64,
+                "bottleneck": {"kind": "vq", "num_codes": 8, "beta": 0.25, "ema": True, "decay": 0.99},
+            },
+        },
+        p,
+    )
+    blob = torch.load(p, map_location=device, weights_only=False)
+    other_bn = make_bottleneck(
+        "vq", dim=64, num_codes=8, beta=0.25,
+        ema=blob["config"]["bottleneck"]["ema"],
+        decay=blob["config"]["bottleneck"]["decay"],
+    )
+    other = LAM(encoder=encoder, bottleneck=other_bn, feat_dim=384, latent_dim=64).to(device)
+    other.bottleneck.load_state_dict(blob["state_dict"]["bottleneck"])
+
+
 def test_checkpoint_roundtrip(tmp_path):
     device = _device()
     model = _build_lam("vq", device)

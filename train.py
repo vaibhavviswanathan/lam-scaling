@@ -43,6 +43,8 @@ def train(
     # discrete-branch args
     num_codes: int = 64,
     vq_beta: float = 0.25,
+    vq_ema: bool = False,
+    vq_decay: float = 0.99,
     # continuous-branch args
     target_beta: float = 0.1,
     kl_warmup_steps: int = 500,
@@ -99,8 +101,21 @@ def train(
     encoder = load_dinov2_small().to(device)
 
     if bottleneck == "vq":
-        bn = make_bottleneck("vq", dim=latent_dim, num_codes=num_codes, beta=vq_beta)
-        bottleneck_config = {"kind": "vq", "num_codes": num_codes, "beta": vq_beta}
+        bn = make_bottleneck(
+            "vq",
+            dim=latent_dim,
+            num_codes=num_codes,
+            beta=vq_beta,
+            ema=vq_ema,
+            decay=vq_decay,
+        )
+        bottleneck_config = {
+            "kind": "vq",
+            "num_codes": num_codes,
+            "beta": vq_beta,
+            "ema": vq_ema,
+            "decay": vq_decay,
+        }
     elif bottleneck == "gaussian":
         bn = make_bottleneck("gaussian", dim=latent_dim, free_bits=free_bits)
         bottleneck_config = {
@@ -124,6 +139,13 @@ def train(
 
     opt = torch.optim.AdamW(trainable, lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
+
+    # Per-step CSV alongside the checkpoint, e.g. runs/lam_vq_h10.steps.csv
+    save_p = Path(save_path)
+    save_p.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = save_p.with_suffix("") .parent / f"{save_p.stem}.steps.csv"
+    csv_f = open(csv_path, "w", buffering=1)  # line-buffered
+    csv_f.write("step,total,recon,bn,codes_used,active_dims,kl_raw,beta\n")
 
     history: list[dict] = []
     step = 0
@@ -151,6 +173,24 @@ def train(
             opt.step()
             sched.step()
 
+            # CSV row every step (cheap; lets us plot smooth trajectories)
+            rec_v = out["recon_loss"].item()
+            bn_v = out["bottleneck_loss"].item()
+            if bottleneck == "vq":
+                codes_v = out["aux"]["codes"].unique().numel()
+                csv_f.write(
+                    f"{step},{loss.item():.6f},{rec_v:.6f},{bn_v:.6f},"
+                    f"{codes_v},,,\n"
+                )
+            else:
+                active_v = int(out["aux"]["active_dims"].item())
+                kl_v = out["aux"]["kl_raw"].item()
+                beta_v = float(out["aux"]["beta"].item())
+                csv_f.write(
+                    f"{step},{loss.item():.6f},{rec_v:.6f},{bn_v:.6f},,"
+                    f"{active_v},{kl_v:.6f},{beta_v:.6f}\n"
+                )
+
             if step % log_every == 0:
                 elapsed = time.time() - t0
                 rec = out["recon_loss"].item()
@@ -175,6 +215,8 @@ def train(
                 })
 
             step += 1
+
+    csv_f.close()
 
     final = {
         "bottleneck": bottleneck,
@@ -219,6 +261,9 @@ if __name__ == "__main__":
     # vq
     p.add_argument("--num_codes", type=int, default=64)
     p.add_argument("--vq_beta", type=float, default=0.25)
+    p.add_argument("--vq_ema", action="store_true",
+                   help="Use EMA codebook updates (recommended for scaling)")
+    p.add_argument("--vq_decay", type=float, default=0.99)
     # gaussian
     p.add_argument("--target_beta", type=float, default=0.1)
     p.add_argument("--kl_warmup_steps", type=int, default=500)
@@ -243,6 +288,8 @@ if __name__ == "__main__":
         latent_dim=args.latent_dim,
         num_codes=args.num_codes,
         vq_beta=args.vq_beta,
+        vq_ema=args.vq_ema,
+        vq_decay=args.vq_decay,
         target_beta=args.target_beta,
         kl_warmup_steps=args.kl_warmup_steps,
         free_bits=args.free_bits,
