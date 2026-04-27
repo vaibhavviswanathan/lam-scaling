@@ -131,18 +131,35 @@ def evaluate(
     seed: int = 999,
     num_workers: int = 2,
     dead_zone: bool = False,
+    source: str = "hf",
+    data_path: str | None = None,
 ) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _load_lam(ckpt, device)
     branch = model.bottleneck.branch_name
 
-    ds = EgocentricClipDataset(
-        clip_len=8,
-        stride=8,
-        max_videos=max(1, int(hours * 20)),
-        clips_per_video=2,
-        seed=seed,
-    )
+    max_videos = max(1, int(hours * 20))
+    if source == "hf":
+        ds = EgocentricClipDataset(
+            clip_len=8,
+            stride=8,
+            max_videos=max_videos,
+            clips_per_video=2,
+            seed=seed,
+        )
+    elif source == "dir":
+        if not data_path:
+            raise ValueError("--data_path required when --source dir")
+        ds = LocalClipDataset(
+            path=data_path,
+            clip_len=8,
+            stride=8,
+            max_videos=max_videos,
+            clips_per_video=2,
+            seed=seed,
+        )
+    else:
+        raise ValueError(f"unknown source: {source}")
     loader = DataLoader(ds, batch_size=batch_size, num_workers=num_workers)
 
     Z, branch_aux, motion, recon, feat_t_sample = collect_outputs(
@@ -194,6 +211,8 @@ if __name__ == "__main__":
     p.add_argument("--dead_zone", action="store_true",
                    help="Run dead-zone diagnostic (continuous branch only)")
     p.add_argument("--out", type=str, default=None)
+    p.add_argument("--source", choices=["hf", "dir"], default="hf")
+    p.add_argument("--data_path", type=str, default=None)
     args = p.parse_args()
 
     metrics = evaluate(
@@ -202,6 +221,8 @@ if __name__ == "__main__":
         batch_size=args.bs,
         num_batches=args.num_batches,
         dead_zone=args.dead_zone,
+        source=args.source,
+        data_path=args.data_path,
     )
     if args.out:
         Path(args.out).write_text(json.dumps(metrics, indent=2))
