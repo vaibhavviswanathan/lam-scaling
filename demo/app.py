@@ -265,8 +265,10 @@ with gr.Blocks(title="LAM Latent Action Tour", theme=gr.themes.Soft()) as demo:
             with gr.Column():
                 gr.Markdown("**Interpolated** — (1−α)·z_A + α·z_B → FDM → nearest real")
                 interp_img = gr.Image(label="retrieved frame_t+1", height=180)
-        alpha = gr.Slider(0.0, 1.0, value=0.5, step=0.02, label="α  (A → B)")
-        interp_info = gr.Markdown("pin both A and B, then drag the slider")
+        with gr.Row():
+            alpha = gr.Slider(0.0, 1.0, value=0.5, step=0.02, label="α  (A → B)", scale=4)
+            play_btn = gr.Button("▶ play A → B", variant="primary", scale=1)
+        interp_info = gr.Markdown("pin both A and B, then drag the slider — or hit ▶ play")
 
     # ---- wiring ----
 
@@ -418,10 +420,41 @@ with gr.Blocks(title="LAM Latent Action Tour", theme=gr.themes.Soft()) as demo:
     def on_alpha(label, anchor_a, anchor_b, a):
         return interpolate(LABEL_TO_TAG[label], anchor_a, anchor_b, a)
 
-    alpha.change(
+    # Use .input() rather than .change() so the play generator's
+    # programmatic alpha updates don't re-trigger this handler and race
+    # the play stream.
+    alpha.input(
         on_alpha,
         inputs=[tag_dropdown, state_anchor_a, state_anchor_b, alpha],
         outputs=[interp_img, interp_info],
+    )
+
+    def play_animation(label, anchor_a, anchor_b):
+        """Stream the interpolation as an animation. Holds A's real
+        frame_{t+1} for a beat, sweeps the FDM through alpha 0→1, then
+        holds B's real frame_{t+1} for a beat."""
+        import time
+        if anchor_a is None or anchor_b is None:
+            yield None, "▶ pin both A and B first", 0.0
+            return
+        tag = LABEL_TO_TAG[label]
+        # 1) Real A frame
+        yield frame_path(anchor_a, "tp1"), f"▶ start: A (transition #{anchor_a}, real frame)", 0.0
+        time.sleep(0.6)
+        # 2) FDM-driven sweep through alpha
+        n_steps = 24
+        for i in range(0, n_steps + 1):
+            alpha_val = i / n_steps
+            img, info = interpolate(tag, anchor_a, anchor_b, alpha_val)
+            yield img, "▶ playing  ·  " + info, alpha_val
+            time.sleep(0.10)
+        # 3) Real B frame
+        yield frame_path(anchor_b, "tp1"), f"▶ end: B (transition #{anchor_b}, real frame)", 1.0
+
+    play_btn.click(
+        play_animation,
+        inputs=[tag_dropdown, state_anchor_a, state_anchor_b],
+        outputs=[interp_img, interp_info, alpha],
     )
 
 
