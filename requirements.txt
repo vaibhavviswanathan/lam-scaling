@@ -14,3 +14,8 @@ plotly>=5.20
 scikit-learn>=1.4
 pillow>=10.0
 pandas>=2.0
+
+# webdemo (webdemo/server.py — vanilla HTML/CSS/JS frontend)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+umap-learn>=0.5

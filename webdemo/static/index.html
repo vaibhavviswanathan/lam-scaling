@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAM latent action tour</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <header class="page-header">
+    <div class="header-inner">
+      <div class="title-block">
+        <h1>LAM latent action tour</h1>
+        <p class="subtitle">
+          500 held-out Egocentric-100K transitions through six trained LAMs.
+          <span class="muted">In-distribution held-out — these clips were not in the training cache; same domain, same factories.</span>
+        </p>
+      </div>
+      <label class="branch-select">
+        <span class="label-text">branch + scale</span>
+        <select id="branch-select"></select>
+      </label>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- TOUR -->
+    <section class="card tour-card">
+      <header class="card-header">
+        <h2>tour</h2>
+        <div class="info" id="info-md">loading…</div>
+      </header>
+
+      <div class="slider-row">
+        <span class="endpoint">low motion</span>
+        <input type="range" id="pct-slider" min="0" max="100" step="0.1" value="50" aria-label="motion percentile">
+        <span class="endpoint">high motion</span>
+      </div>
+
+      <div class="frames-row">
+        <figure class="frame">
+          <img id="frame-t" alt="frame_t">
+          <figcaption><code>frame<sub>t</sub></code> — input to IDM</figcaption>
+        </figure>
+        <figure class="frame">
+          <img id="frame-tp1" alt="frame_t+1">
+          <figcaption><code>frame<sub>t+1</sub></code> — target of FDM</figcaption>
+        </figure>
+      </div>
+
+      <div class="scatter-controls">
+        <span class="label-text">projection</span>
+        <div class="toggle-group" role="tablist">
+          <button type="button" class="toggle active" data-proj="pca" role="tab" aria-selected="true">PCA</button>
+          <button type="button" class="toggle" data-proj="tsne" role="tab" aria-selected="false">t-SNE</button>
+          <button type="button" class="toggle" data-proj="umap" role="tab" aria-selected="false">UMAP</button>
+        </div>
+        <span class="proj-status muted small" id="proj-status"></span>
+      </div>
+      <div id="scatter" class="scatter"></div>
+    </section>
+
+    <!-- INTERPOLATION -->
+    <section class="card interp-card">
+      <header class="card-header">
+        <h2>interpolate two transitions</h2>
+        <div class="info" id="interp-info">pin both A and B to enable interpolation</div>
+      </header>
+
+      <div class="actions">
+        <button id="pin-a-btn" class="btn">📌 pin current as A</button>
+        <button id="pin-b-btn" class="btn">📌 pin current as B</button>
+        <button id="random-pair-btn" class="btn primary">🎲 contrasting pair</button>
+        <button id="swap-btn" class="btn">swap A ↔ B</button>
+        <button id="play-btn" class="btn primary" disabled>▶ play A → B</button>
+      </div>
+
+      <div class="frames-row triple">
+        <figure class="frame">
+          <img id="anchor-a-img" alt="A: frame_t+1">
+          <figcaption><strong>A</strong> · <span id="anchor-a-id" class="muted">—</span></figcaption>
+        </figure>
+        <figure class="frame">
+          <img id="interp-img" alt="interpolated frame_t+1">
+          <figcaption><strong>interpolated</strong> · <span class="muted">retrieved real frame</span></figcaption>
+        </figure>
+        <figure class="frame">
+          <img id="anchor-b-img" alt="B: frame_t+1">
+          <figcaption><strong>B</strong> · <span id="anchor-b-id" class="muted">—</span></figcaption>
+        </figure>
+      </div>
+
+      <div class="slider-row">
+        <span class="endpoint">A</span>
+        <input type="range" id="alpha-slider" min="0" max="1" step="0.01" value="0.5" aria-label="alpha (A → B)" disabled>
+        <span class="endpoint">B</span>
+      </div>
+    </section>
+
+    <footer>
+      <p class="muted small">
+        See <a href="https://github.com/vaibhavviswanathan/lam-scaling" target="_blank" rel="noopener">vaibhavviswanathan/lam-scaling</a>
+        for the trained models, the sweep that produced them, and the
+        <a href="https://github.com/vaibhavviswanathan/lam-scaling/blob/main/results.md" target="_blank" rel="noopener">preliminary scaling results</a>.
+        Frames are real held-out clips; the interpolation step retrieves the nearest real <code>frame<sub>t+1</sub></code> to the FDM's prediction (no pixel decoder).
+      </p>
+    </footer>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
